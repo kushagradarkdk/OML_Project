@@ -4,6 +4,7 @@ from keras import backend as K
 import tensorflow as tf
 
 class AAdam (Optimizer):
+    #AADAM optimizer which implemets the aspect of acceleration in normal ADAM algorithm.
     def __init__(self, learning_rate=0.001, beta_1=0.9, beta_2=0.999,
                  epsilon=None, decay=0., amsgrad=False, **kwargs):
         super(AAdam, self).__init__(**kwargs)
@@ -18,11 +19,22 @@ class AAdam (Optimizer):
         self.epsilon = epsilon
         self.initial_decay = decay
         self.amsgrad = amsgrad
-
+        
+    def get_config(self):
+        config = {'learning_rate': float(K.get_value(self.learning_rate)),
+                  'beta_1': float(K.get_value(self.beta_1)),
+                  'beta_2': float(K.get_value(self.beta_2)),
+                  'decay': float(K.get_value(self.decay)),
+                  'epsilon': self.epsilon,
+                  'amsgrad': self.amsgrad}
+        base_config = super(AAdam, self).get_config()
+        return dict(list(base_config.items()) + list(config.items()))
+    
     @interfaces.legacy_get_updates_support
     def get_updates(self, loss, params):
-        p_grads = [K.zeros(K.int_shape(p), dtype=K.dtype(p)) for p in params]
-        grads = self.get_gradients(loss, params)
+        #previous gradient
+        previous_gradients = [K.zeros(K.int_shape(p), dtype=K.dtype(p)) for p in params]
+        gradients = self.get_gradients(loss, params)
         self.updates = [K.update_add(self.iterations, 1)]
 
         learning_rate = self.learning_rate
@@ -42,22 +54,22 @@ class AAdam (Optimizer):
             vhats = [K.zeros((1,1)) for _ in params]
         self.weights = [self.iterations] + ms + vs + vhats 
 
-        for p, g, m, v, vhat, past_g in zip(params, grads, ms, vs, vhats, p_grads):
+        for p, g, m, v, vhat, past_g in zip(params, gradients, ms, vs, vhats, previous_gradients):
             v_t =  (self.beta_2 * v) + (1. - self.beta_2) * K.square(g)
 
             if self.amsgrad:
-                # past_g or m_t
-                m_t = tf.where(tf.logical_and(tf.abs(past_g - g)>0.001,past_g*g>0),(self.beta_1 * m) +  (1. - self.beta_1) *  (g + past_g),(self.beta_1 * m) + (1. - self.beta_1) * g) 
+                # past_g or momentum_current
+                momentum_current = tf.where(tf.logical_and(tf.abs(past_g - g)>0.001,past_g*g>0),(self.beta_1 * m) +  (1. - self.beta_1) *  (g + past_g),(self.beta_1 * m) + (1. - self.beta_1) * g) 
                 vhat_t = K.maximum(vhat, v_t)
-                p_t = p - learning_rate_t * m_t / (K.sqrt(vhat_t) + self.epsilon)
+                p_t = p - learning_rate_t * momentum_current / (K.sqrt(vhat_t) + self.epsilon)
                 self.updates.append(K.update(vhat, vhat_t))
             else:
-                # past_g or m_t
-                m_t = tf.where(tf.logical_and(tf.abs(past_g - g)>0.001,past_g*g>0),(self.beta_1 * m) +  (1. - self.beta_1) *  (g + past_g),(self.beta_1 * m) + (1. - self.beta_1) * g) 
-                p_t = p - learning_rate_t * m_t / (K.sqrt(v_t) + self.epsilon)
+                # past_g or momentum_current
+                momentum_current = tf.where(tf.logical_and(tf.abs(past_g - g)>0.001,past_g*g>0),(self.beta_1 * m) +  (1. - self.beta_1) *  (g + past_g),(self.beta_1 * m) + (1. - self.beta_1) * g) 
+                p_t = p - learning_rate_t * momentum_current / (K.sqrt(v_t) + self.epsilon)
             self.updates.append(K.update(v, v_t))
             self.updates.append(K.update(past_g, g))
-            self.updates.append(K.update(m, m_t))
+            self.updates.append(K.update(m, momentum_current))
             new_p = p_t
 
             # Apply constraints.
@@ -67,12 +79,4 @@ class AAdam (Optimizer):
             self.updates.append(K.update(p, new_p))
         return self.updates
 
-    def get_config(self):
-        config = {'learning_rate': float(K.get_value(self.learning_rate)),
-                  'beta_1': float(K.get_value(self.beta_1)),
-                  'beta_2': float(K.get_value(self.beta_2)),
-                  'decay': float(K.get_value(self.decay)),
-                  'epsilon': self.epsilon,
-                  'amsgrad': self.amsgrad}
-        base_config = super(AAdam, self).get_config()
-        return dict(list(base_config.items()) + list(config.items()))
+    
